@@ -1,0 +1,99 @@
+name: Dienstmotor images
+
+# Builds and publishes hbbs, hbbr and the auth API only after the full test suite (Rust unit
+# tests, auth API tests and the end-to-end protocol tests against the built hbbs) passes.
+# Publishing is not deploying: production pins an explicit tag in docker-compose, so a new
+# image is never picked up automatically.
+on:
+  push:
+    tags: ["dm-v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish images to GHCR (unchecked: test only)"
+        type: boolean
+        default: false
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust tests
+        run: cargo test --bin hbbs --lib
+      - name: Build hbbs for e2e
+        run: cargo build --release --bin hbbs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Auth API + end-to-end protocol tests
+        working-directory: dienstmotor/auth-api
+        env:
+          HBBS_BIN: ${{ github.workspace }}/target/release/hbbs
+        run: |
+          pip install -r requirements-e2e.txt
+          python -m pytest -v
+
+  images:
+    needs: test
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/dm-v* ]]; then
+            echo "TAG=${GITHUB_REF#refs/tags/dm-}" >> "$GITHUB_ENV"
+          else
+            echo "TAG=sha-${GITHUB_SHA::12}" >> "$GITHUB_ENV"
+          fi
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: hbbs
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dienstmotor/Dockerfile.server
+          target: hbbs
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/dm-hbbs:${{ env.TAG }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
+      - name: hbbr
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dienstmotor/Dockerfile.server
+          target: hbbr
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/dm-hbbr:${{ env.TAG }}
+          cache-from: type=gha,scope=server
+      - name: auth API
+        uses: docker/build-push-action@v6
+        with:
+          context: dienstmotor/auth-api
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/dm-remote-auth-api:${{ env.TAG }}

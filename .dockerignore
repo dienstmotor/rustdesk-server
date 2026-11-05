@@ -1,0 +1,5 @@
+target
+target-docker
+dienstmotor/auth-api
+.git
+db_v2.sqlite3

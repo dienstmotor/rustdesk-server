@@ -568,6 +568,17 @@ impl RendezvousServer {
                         );
                         return false;
                     }
+                    if let Err(reason) =
+                        crate::dm_auth::authorize(&rf.token, &rf.id, addr, "relay").await
+                    {
+                        let mut msg_out = RendezvousMessage::new();
+                        msg_out.set_relay_response(RelayResponse {
+                            refuse_reason: reason,
+                            ..Default::default()
+                        });
+                        Self::send_to_sink(sink, msg_out).await;
+                        return false;
+                    }
                     // there maybe several attempt, so sink can be none
                     if let Some(sink) = sink.take() {
                         self.tcp_punch.lock().await.insert(try_into_v4(addr), sink);
@@ -768,6 +779,14 @@ impl RendezvousServer {
             let mut msg_out = RendezvousMessage::new();
             msg_out.set_punch_hole_response(PunchHoleResponse {
                 failure: punch_hole_response::Failure::LICENSE_MISMATCH.into(),
+                ..Default::default()
+            });
+            return Ok((msg_out, None));
+        }
+        if let Err(reason) = crate::dm_auth::authorize(&ph.token, &ph.id, addr, "punch").await {
+            let mut msg_out = RendezvousMessage::new();
+            msg_out.set_punch_hole_response(PunchHoleResponse {
+                other_failure: reason,
                 ..Default::default()
             });
             return Ok((msg_out, None));

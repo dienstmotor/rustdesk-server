@@ -1,0 +1,20 @@
+# Dienstmotor hbbs / hbbr. Same layout as the classic rustdesk/rustdesk-server image
+# (binaries in /usr/bin, WORKDIR /root), so the existing ./data:/root volume and its
+# id_ed25519 key pair are reused untouched.
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release --bin hbbs --bin hbbr
+
+FROM debian:bookworm-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/hbbs /usr/bin/hbbs
+COPY --from=build /src/target/release/hbbr /usr/bin/hbbr
+WORKDIR /root
+ENV HOME=/root
+
+FROM base AS hbbr
+ENTRYPOINT ["/usr/bin/hbbr"]
+
+FROM base AS hbbs
+ENTRYPOINT ["/usr/bin/hbbs"]
